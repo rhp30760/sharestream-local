@@ -10,10 +10,58 @@ interface FileData {
   size: number;
   type: string;
   data: ArrayBuffer;
+  createdAt: number; // Adding timestamp for sorting
 }
 
-// In-memory storage for files (in a real app, consider IndexedDB for larger files)
-const fileStorage = new Map<string, FileData>();
+// Define a key for localStorage
+const STORAGE_KEY = 'localshare_files';
+
+// In-memory storage for files
+let fileStorage = new Map<string, FileData>();
+
+// Initialize storage from localStorage if available
+const initializeFromStorage = () => {
+  try {
+    const savedFiles = localStorage.getItem(STORAGE_KEY);
+    if (savedFiles) {
+      const fileObjects = JSON.parse(savedFiles);
+      // We can't store ArrayBuffer in localStorage, so we'll need to re-add files
+      // But we can show their metadata
+      fileObjects.forEach((file: Omit<FileData, 'data'> & { hasData: boolean }) => {
+        if (!file.hasData) {
+          // Add metadata-only entries (these will show as "unavailable" when accessed from other devices)
+          fileStorage.set(file.id, {
+            ...file,
+            data: new ArrayBuffer(0) // Empty buffer for files without data
+          });
+        }
+      });
+    }
+  } catch (error) {
+    console.error("Failed to load from localStorage:", error);
+  }
+};
+
+// Save file metadata to localStorage
+const saveToStorage = () => {
+  try {
+    // Convert to array of objects without the ArrayBuffer data (too large for localStorage)
+    const serializable = Array.from(fileStorage.values()).map(file => ({
+      id: file.id,
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      createdAt: file.createdAt,
+      hasData: file.data.byteLength > 0 // Flag to indicate if the actual data is available
+    }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializable));
+  } catch (error) {
+    console.error("Failed to save to localStorage:", error);
+  }
+};
+
+// Initialize on module load
+initializeFromStorage();
 
 // Get the local network IP address
 export const getLocalIpAddress = async (): Promise<string> => {
@@ -77,8 +125,12 @@ export const storeFile = (file: File): Promise<string> => {
         name: file.name,
         size: file.size,
         type: file.type,
-        data: event.target.result as ArrayBuffer
+        data: event.target.result as ArrayBuffer,
+        createdAt: Date.now()
       });
+      
+      // Save metadata to localStorage
+      saveToStorage();
       
       resolve(fileId);
     };
@@ -111,13 +163,22 @@ export const listFiles = (): Array<Pick<FileData, 'id' | 'name' | 'size' | 'type
 
 // Delete a file by ID
 export const deleteFile = (fileId: string): boolean => {
-  return fileStorage.delete(fileId);
+  const result = fileStorage.delete(fileId);
+  if (result) {
+    saveToStorage(); // Update localStorage
+  }
+  return result;
 };
 
 // Get a blob URL for a file
 export const getFileBlobUrl = (fileId: string): string | null => {
   const file = fileStorage.get(fileId);
   if (!file) return null;
+  
+  // Check if this is a placeholder file (no data)
+  if (file.data.byteLength === 0) {
+    return null;
+  }
   
   const blob = new Blob([file.data], { type: file.type || 'application/octet-stream' });
   return URL.createObjectURL(blob);

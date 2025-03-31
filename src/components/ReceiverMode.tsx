@@ -1,10 +1,10 @@
 
 import { useState, useCallback, useEffect } from "react";
-import { Download, Check, X, RefreshCw } from "lucide-react";
+import { Download, Check, X, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { useToast } from "@/components/ui/use-toast";
-import { listFiles, getFileMetadata, getFileBlobUrl } from "@/lib/localServer";
+import { useToast } from "@/hooks/use-toast";
+import { listFiles, getFileMetadata, getFileBlobUrl, deleteFile } from "@/lib/localServer";
 
 interface FileInfo {
   id: string;
@@ -15,7 +15,7 @@ interface FileInfo {
 
 const ReceiverMode = () => {
   const [availableFiles, setAvailableFiles] = useState<FileInfo[]>([]);
-  const [downloadedFiles, setDownloadedFiles] = useState<{id: string, name: string, url: string, size: number}[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<{id: string, name: string, url: string, size: number}[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const { toast } = useToast();
 
@@ -49,32 +49,39 @@ const ReceiverMode = () => {
       if (!url) {
         toast({
           title: "Download Error",
-          description: "Failed to create download URL",
+          description: "File data is not available on this device",
           variant: "destructive",
         });
         return;
       }
       
-      // Add to downloaded files
-      setDownloadedFiles(prev => [
-        ...prev,
-        {
-          id: fileId,
-          name: file.name,
-          url,
-          size: file.size
+      // Add to selected files
+      setSelectedFiles(prev => {
+        // Check if file is already in selected files
+        if (prev.some(f => f.id === fileId)) {
+          return prev; // File already selected
         }
-      ]);
+        
+        return [
+          ...prev,
+          {
+            id: fileId,
+            name: file.name,
+            url,
+            size: file.size
+          }
+        ];
+      });
       
       toast({
-        title: "Download Ready",
+        title: "File Selected",
         description: `${file.name} is ready to save`,
       });
     } catch (error) {
       console.error("Error downloading file:", error);
       toast({
-        title: "Download Error",
-        description: "Failed to download file",
+        title: "Selection Error",
+        description: "Failed to prepare file",
         variant: "destructive",
       });
     }
@@ -88,6 +95,32 @@ const ReceiverMode = () => {
     a.click();
     document.body.removeChild(a);
   }, []);
+
+  const removeSelectedFile = useCallback((fileId: string) => {
+    setSelectedFiles(prev => prev.filter(file => file.id !== fileId));
+    toast({
+      title: "File Removed",
+      description: "File removed from selection",
+    });
+  }, [toast]);
+
+  const removeAvailableFile = useCallback((fileId: string) => {
+    // Remove from both available files and selected files
+    if (deleteFile(fileId)) {
+      setAvailableFiles(prev => prev.filter(file => file.id !== fileId));
+      setSelectedFiles(prev => prev.filter(file => file.id !== fileId));
+      toast({
+        title: "File Deleted",
+        description: "File has been deleted",
+      });
+    } else {
+      toast({
+        title: "Delete Failed",
+        description: "Could not delete the file",
+        variant: "destructive",
+      });
+    }
+  }, [toast]);
 
   return (
     <div className="space-y-6">
@@ -130,25 +163,34 @@ const ReceiverMode = () => {
                   </span>
                 </div>
                 
-                <Button 
-                  variant="outline" 
-                  size="sm"
-                  onClick={() => downloadFile(file.id)}
-                >
-                  Download
-                </Button>
+                <div className="flex space-x-2">
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={() => downloadFile(file.id)}
+                  >
+                    Download
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => removeAvailableFile(file.id)}
+                  >
+                    <Trash2 className="h-4 w-4 text-red-500" />
+                  </Button>
+                </div>
               </div>
             ))}
           </div>
         )}
       </div>
       
-      {downloadedFiles.length > 0 && (
+      {selectedFiles.length > 0 && (
         <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="font-medium mb-4">Downloaded Files</h3>
+          <h3 className="font-medium mb-4">Selected Files</h3>
           
           <div className="space-y-3 max-h-60 overflow-y-auto">
-            {downloadedFiles.map((file, idx) => (
+            {selectedFiles.map((file, idx) => (
               <div key={idx} className="flex items-center justify-between p-3 bg-green-50 rounded border border-green-100">
                 <div className="flex items-center space-x-2">
                   <Check className="h-5 w-5 text-green-500" />
@@ -158,13 +200,22 @@ const ReceiverMode = () => {
                   </span>
                 </div>
                 
-                <Button 
-                  variant="outline" 
-                  size="sm"
-                  onClick={() => saveFile(file.url, file.name)}
-                >
-                  Save
-                </Button>
+                <div className="flex space-x-2">
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={() => saveFile(file.url, file.name)}
+                  >
+                    Save
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={() => removeSelectedFile(file.id)}
+                  >
+                    <X className="h-4 w-4 text-red-500" />
+                  </Button>
+                </div>
               </div>
             ))}
           </div>
