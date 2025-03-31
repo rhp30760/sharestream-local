@@ -15,18 +15,139 @@ interface FileData {
 
 // Define a key for localStorage
 const STORAGE_KEY = 'localshare_files';
+const DB_NAME = 'localshare_db';
+const STORE_NAME = 'files';
 
 // In-memory storage for files
 let fileStorage = new Map<string, FileData>();
 
-// Initialize storage from localStorage if available
-const initializeFromStorage = () => {
+// Initialize IndexedDB
+const initDB = (): Promise<IDBDatabase> => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+    
+    request.onerror = (event) => {
+      console.error('IndexedDB error:', event);
+      reject('Could not open IndexedDB');
+    };
+    
+    request.onsuccess = (event) => {
+      const db = (event.target as IDBOpenDBRequest).result;
+      resolve(db);
+    };
+    
+    request.onupgradeneeded = (event) => {
+      const db = (event.target as IDBOpenDBRequest).result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+      }
+    };
+  });
+};
+
+// Load file from IndexedDB
+const loadFileFromDB = async (fileId: string): Promise<FileData | null> => {
   try {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction([STORE_NAME], 'readonly');
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.get(fileId);
+      
+      request.onsuccess = () => {
+        resolve(request.result || null);
+      };
+      
+      request.onerror = (event) => {
+        console.error('Error loading file from IndexedDB:', event);
+        reject(null);
+      };
+    });
+  } catch (error) {
+    console.error('Failed to load file from IndexedDB:', error);
+    return null;
+  }
+};
+
+// Save file to IndexedDB
+const saveFileToDB = async (file: FileData): Promise<boolean> => {
+  try {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction([STORE_NAME], 'readwrite');
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.put(file);
+      
+      request.onsuccess = () => {
+        resolve(true);
+      };
+      
+      request.onerror = (event) => {
+        console.error('Error saving file to IndexedDB:', event);
+        resolve(false);
+      };
+    });
+  } catch (error) {
+    console.error('Failed to save file to IndexedDB:', error);
+    return false;
+  }
+};
+
+// Delete file from IndexedDB
+const deleteFileFromDB = async (fileId: string): Promise<boolean> => {
+  try {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction([STORE_NAME], 'readwrite');
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.delete(fileId);
+      
+      request.onsuccess = () => {
+        resolve(true);
+      };
+      
+      request.onerror = (event) => {
+        console.error('Error deleting file from IndexedDB:', event);
+        resolve(false);
+      };
+    });
+  } catch (error) {
+    console.error('Failed to delete file from IndexedDB:', error);
+    return false;
+  }
+};
+
+// List all files from IndexedDB
+const listFilesFromDB = async (): Promise<FileData[]> => {
+  try {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction([STORE_NAME], 'readonly');
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.getAll();
+      
+      request.onsuccess = () => {
+        resolve(request.result || []);
+      };
+      
+      request.onerror = (event) => {
+        console.error('Error listing files from IndexedDB:', event);
+        resolve([]);
+      };
+    });
+  } catch (error) {
+    console.error('Failed to list files from IndexedDB:', error);
+    return [];
+  }
+};
+
+// Initialize storage from IndexedDB
+const initializeFromStorage = async () => {
+  try {
+    // First load metadata from localStorage for backward compatibility
     const savedFiles = localStorage.getItem(STORAGE_KEY);
     if (savedFiles) {
       const fileObjects = JSON.parse(savedFiles);
-      // We can't store ArrayBuffer in localStorage, so we'll need to re-add files
-      // But we can show their metadata
       fileObjects.forEach((file: Omit<FileData, 'data'> & { hasData: boolean }) => {
         if (!file.hasData) {
           // Add metadata-only entries (these will show as "unavailable" when accessed from other devices)
@@ -37,15 +158,23 @@ const initializeFromStorage = () => {
         }
       });
     }
+    
+    // Then load from IndexedDB, which overrides localStorage data if available
+    const dbFiles = await listFilesFromDB();
+    dbFiles.forEach(file => {
+      fileStorage.set(file.id, file);
+    });
+    
+    console.log(`Loaded ${fileStorage.size} files from storage`);
   } catch (error) {
-    console.error("Failed to load from localStorage:", error);
+    console.error("Failed to load from storage:", error);
   }
 };
 
-// Save file metadata to localStorage
-const saveToStorage = () => {
+// Save file metadata to localStorage and actual file to IndexedDB
+const saveToStorage = async () => {
   try {
-    // Convert to array of objects without the ArrayBuffer data (too large for localStorage)
+    // Save metadata to localStorage for quick access
     const serializable = Array.from(fileStorage.values()).map(file => ({
       id: file.id,
       name: file.name,
@@ -55,8 +184,15 @@ const saveToStorage = () => {
       hasData: file.data.byteLength > 0 // Flag to indicate if the actual data is available
     }));
     localStorage.setItem(STORAGE_KEY, JSON.stringify(serializable));
+    
+    // Save actual file data to IndexedDB
+    for (const file of fileStorage.values()) {
+      if (file.data.byteLength > 0) {
+        await saveFileToDB(file);
+      }
+    }
   } catch (error) {
-    console.error("Failed to save to localStorage:", error);
+    console.error("Failed to save to storage:", error);
   }
 };
 
@@ -113,24 +249,26 @@ export const storeFile = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       if (!event.target?.result) {
         reject(new Error("Failed to read file"));
         return;
       }
       
       const fileId = nanoid();
-      fileStorage.set(fileId, {
+      const fileData: FileData = {
         id: fileId,
         name: file.name,
         size: file.size,
         type: file.type,
         data: event.target.result as ArrayBuffer,
         createdAt: Date.now()
-      });
+      };
       
-      // Save metadata to localStorage
-      saveToStorage();
+      fileStorage.set(fileId, fileData);
+      
+      // Save to persistent storage
+      await saveToStorage();
       
       resolve(fileId);
     };
@@ -162,10 +300,11 @@ export const listFiles = (): Array<Pick<FileData, 'id' | 'name' | 'size' | 'type
 };
 
 // Delete a file by ID
-export const deleteFile = (fileId: string): boolean => {
+export const deleteFile = async (fileId: string): Promise<boolean> => {
   const result = fileStorage.delete(fileId);
   if (result) {
-    saveToStorage(); // Update localStorage
+    await deleteFileFromDB(fileId);
+    await saveToStorage(); // Update localStorage
   }
   return result;
 };
