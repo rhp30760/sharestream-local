@@ -7,6 +7,13 @@ import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/components/ui/use-toast";
 import { initializePeerConnection } from "@/lib/peerConnection";
 
+interface FileInfo {
+  name: string;
+  size: number;
+  index: number;
+  type?: string; // Make type optional
+}
+
 const ReceiverMode = () => {
   const [peerId, setPeerId] = useState<string>("");
   const [connectionId, setConnectionId] = useState<string>("");
@@ -14,7 +21,7 @@ const ReceiverMode = () => {
   const [connection, setConnection] = useState<any>(null);
   const [connectionStatus, setConnectionStatus] = useState<"disconnected" | "connecting" | "connected">("disconnected");
   const [receivedFiles, setReceivedFiles] = useState<{name: string, url: string, size: number}[]>([]);
-  const [incomingFiles, setIncomingFiles] = useState<{name: string, size: number, index: number}[]>([]);
+  const [incomingFiles, setIncomingFiles] = useState<FileInfo[]>([]);
   const [fileProgress, setFileProgress] = useState<{[key: string]: number}>({});
   const { toast } = useToast();
   

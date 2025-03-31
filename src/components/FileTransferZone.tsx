@@ -261,7 +261,10 @@ const FileTransferZone = ({ onConnectionEstablished }: FileTransferZoneProps) =>
           type="file"
           ref={directoryInputRef}
           onChange={handleDirectoryInputChange}
+          // Use the attributes as a string (TypeScript workaround)
+          // @ts-ignore
           webkitdirectory=""
+          // @ts-ignore
           directory=""
           multiple
           className="hidden"
